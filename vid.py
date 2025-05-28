@@ -148,6 +148,27 @@ class VideoPlayerApp:
                 self._update_button_states('disabled')  # Desativa botões se falhar
                 return
             self._update_button_states('normal')  # Ativa botões se sucesso
+            # --- NEW CODE BELOW ---
+            import os
+            # Path, name, extension
+            video_full_path = self.video_path
+            # File size in MB
+            file_size = os.path.getsize(self.video_path) / (1024 * 1024)
+            # Frame count
+            frame_count = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            # Dimensions
+            width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            # Duration in seconds
+            fps = self.cap.get(cv2.CAP_PROP_FPS)
+            duration = frame_count / fps if fps > 0 else 0
+            # Format duration as mm:ss
+            mins = int(duration // 60)
+            secs = int(duration % 60)
+            duration_str = f"{mins:02d}:{secs:02d}"
+            # Set window title
+            self.root.title(f"Video Player | {video_full_path} | {file_size:.2f} MB | {width}x{height} | {duration_str} | {frame_count} frames")
+            # --- END NEW CODE ---
             self.show_preview()
         else:
             self._update_button_states('disabled')  # Desativa botões se nenhum arquivo selecionado
