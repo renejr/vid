@@ -8,6 +8,7 @@ import concurrent.futures
 import pygame
 import time
 import tempfile
+import shutil
 
 # Remove the first import of moviepy and keep only the try-except block
 try:
@@ -380,8 +381,7 @@ class VideoPlayerApp:
                         os.remove(video_destination
                         )
 
-                
-                # os.rename(self.video_path, video_destination)
+                shutil.copy2(self.video_path, video_destination) 
 
             messagebox.showinfo("Sucesso", f"Extração concluída!\nFrames salvos em:\n{output_dir}")
 
