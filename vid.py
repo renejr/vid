@@ -9,6 +9,7 @@ import pygame
 import time
 import tempfile
 import shutil
+import numpy as np
 
 # Remove the first import of moviepy and keep only the try-except block
 try:
@@ -176,6 +177,7 @@ class VideoPlayerApp:
             self.show_preview()
         else:
             self._update_button_states('disabled')  # Desativa botões se nenhum arquivo selecionado
+    
     def show_preview(self):
         if not self.video_path:
             return
@@ -222,9 +224,37 @@ class VideoPlayerApp:
                                     pygame.mixer.music.play()
                         continue
                     
-                    # Processa frame (código existente)
+                    # Processa frame mantendo aspect ratio corretamente
                     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    # ... (restante do processamento de frame)
+                    img_height, img_width = frame.shape[:2]
+                    aspect_ratio = img_width / img_height
+                    
+                    # Obtém dimensões disponíveis
+                    window_width = self.preview_label.winfo_width()
+                    window_height = self.preview_label.winfo_height()
+                    
+                    if window_width > 1 and window_height > 1:
+                        # Calcula novas dimensões que cabem na janela mantendo a proporção
+                        if window_width / window_height > aspect_ratio:
+                            # Limita pela altura
+                            new_height = window_height
+                            new_width = int(new_height * aspect_ratio)
+                        else:
+                            # Limita pela largura
+                            new_width = window_width
+                            new_height = int(new_width / aspect_ratio)
+                        
+                        # Redimensiona mantendo a proporção original
+                        frame = cv2.resize(frame, (new_width, new_height))
+                        
+                        # Cria uma imagem preta do tamanho da janela
+                        bg = np.zeros((window_height, window_width, 3), dtype=np.uint8)
+                        
+                        # Centraliza a imagem redimensionada
+                        x_offset = (window_width - new_width) // 2
+                        y_offset = (window_height - new_height) // 2
+                        bg[y_offset:y_offset+new_height, x_offset:x_offset+new_width] = frame
+                        frame = bg
                     
                     # Atualiza preview
                     image = Image.fromarray(frame)
