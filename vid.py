@@ -175,7 +175,9 @@ class VideoPlayerApp:
             self._update_button_states('disabled')  # Desativa botões se nenhum arquivo selecionado
 
     def show_preview(self):
-        if not self.cap or not self.cap.isOpened():
+        if self.cap is None or not hasattr(self.cap, 'read') or not self.cap.isOpened():
+            self.cap = cv2.VideoCapture(self.video_path)
+        if self.cap is None or not hasattr(self.cap, 'read') or not self.cap.isOpened():
             messagebox.showwarning("Aviso", "Nenhum vídeo carregado para preview!")
             return
         
@@ -299,92 +301,66 @@ class VideoPlayerApp:
         """Salva um frame individual como arquivo TIFF"""
         cv2.imwrite(frame_path, frame, [cv2.IMWRITE_TIFF_COMPRESSION, cv2.IMWRITE_TIFF_COMPRESSION_DEFLATE])
 
-    # Altere o comando do botão de extração:
     def extract_frames(self):
-        # self.export_dialog()  # Removido, pois não existe
         if not self._validate_video_file():
             return
-
-        # Let user select output directory
         output_dir = filedialog.askdirectory(title="Selecione a pasta para salvar os frames")
-        if not output_dir:  # User cancelled
+        if not output_dir:
             return
+        threading.Thread(target=self._extract_frames_worker, args=(output_dir,)).start()
 
+    def _extract_frames_worker(self, output_dir):
         if self.cap is not None:
             self.cap.release()
             self.cap = None
-
         BATCH_SIZE = 50
         cap = None
-        
         try:
             cap = cv2.VideoCapture(self.video_path)
             if not cap.isOpened():
-                messagebox.showerror("Erro", "Erro ao abrir o vídeo!")
+                self.root.after(0, lambda: messagebox.showerror("Erro", "Erro ao abrir o vídeo!"))
                 return
-
             video_name = os.path.splitext(os.path.basename(self.video_path))[0].replace(' ', '_')
-            video_name = video_name.replace("'", "")
-            video_name = video_name.replace(":", "")
-            video_name = video_name.replace(";", "")
-            video_name = video_name.replace("-", "")
-            video_name = video_name.replace("–", "")
-            video_name = video_name.replace("—", "")
-            video_name = video_name.replace(".", "")
-        
+            video_name = video_name.replace("'", "").replace(":", "").replace(";", "").replace("-", "").replace("–", "").replace("—", "").replace(".", "")
             output_dir = os.path.join(output_dir, video_name)
             if not os.path.exists(output_dir):
                 os.makedirs(output_dir)
-
             frame_count = 0
             batch_frames = []
-
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             while cap.isOpened():
                 ret, frame = cap.read()
                 if not ret:
                     break
-                
                 frame_path = os.path.join(output_dir, f"{video_name}_{frame_count:04d}.tiff")
                 batch_frames.append((frame.copy(), frame_path))
                 frame_count += 1
-
-                # Processa o lote quando atingir o tamanho definido
                 if len(batch_frames) >= BATCH_SIZE:
                     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-                        futures = [
-                            executor.submit(self.save_frame, frame, path)
-                            for frame, path in batch_frames
-                        ]
+                        futures = [executor.submit(self.save_frame, frame, path) for frame, path in batch_frames]
                         concurrent.futures.wait(futures)
                     batch_frames.clear()
-
-            # Processa o último lote se houver frames restantes
+                # Atualiza barra de progresso
+                self.root.after(0, lambda fc=frame_count, tf=total_frames: self._update_progress(fc, tf))
             if batch_frames:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-                    futures = [
-                        executor.submit(self.save_frame, frame, path)
-                        for frame, path in batch_frames
-                    ]
+                    futures = [executor.submit(self.save_frame, frame, path) for frame, path in batch_frames]
                     concurrent.futures.wait(futures)
-
-            # Ask user if they want to copy the video file
-            if messagebox.askyesno("Copiar Arquivo de Vídeo", 
-                                 "Deseja copiar o arquivo de vídeo original para a pasta de destino?"):
-                video_filename = os.path.basename(self.video_path)
-                video_destination = os.path.join(output_dir, video_filename)
-                # Copia o arquivo de vídeo
-                if os.path.exists(video_destination):
-                    os.remove(video_destination)
-                    # Renomeia o arquivo de vídeo
-                    video_destination = os.path.join(output_dir, f"{video_name}.mp4")
+            # Copia o vídeo se desejado
+            def copy_video():
+                if messagebox.askyesno("Copiar Arquivo de Vídeo", 
+                                     "Deseja copiar o arquivo de vídeo original para a pasta de destino?"):
+                    video_filename = os.path.basename(self.video_path)
+                    video_destination = os.path.join(output_dir, video_filename)
                     if os.path.exists(video_destination):
-                        os.remove(video_destination
-                        )
-
-                shutil.copy2(self.video_path, video_destination) 
-
-            messagebox.showinfo("Sucesso", f"Extração concluída!\nFrames salvos em:\n{output_dir}")
-
+                        os.remove(video_destination)
+                        video_destination = os.path.join(output_dir, f"{video_name}.mp4")
+                        if os.path.exists(video_destination):
+                            os.remove(video_destination)
+                    shutil.copy2(self.video_path, video_destination)
+                messagebox.showinfo("Sucesso", f"Extração concluída!\nFrames salvos em:\n{output_dir}")
+                self._update_progress(total_frames, total_frames)
+            self.root.after(0, copy_video)
         except PermissionError:
             messagebox.showerror("Erro", "Não foi possível mover o arquivo de vídeo. Ele pode estar em uso.")
         except Exception as e:
@@ -393,8 +369,14 @@ class VideoPlayerApp:
             if cap is not None:
                 cap.release()
                 cv2.destroyAllWindows()
+            # ADICIONE ISSO APÓS O finally:
+            self.cap = cv2.VideoCapture(self.video_path)
 
-        
+    def _update_progress(self, frame_count, total_frames):
+        percent = 100 * frame_count / total_frames if total_frames else 0
+        self.progress_var.set(percent)
+        self.progress_label.config(text=f"{frame_count}/{total_frames} frames extraídos")
+        self.root.update_idletasks()
 
 if __name__ == "__main__":
     root = tk.Tk()
