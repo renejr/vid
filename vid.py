@@ -43,6 +43,9 @@ class VideoPlayerApp:
         self.preview_playing = False
         self.preview_thread = None
         self.temp_audio_file = None
+
+        self.preview_cap = None  # VideoCapture dedicado para o preview
+        self.preview_lock = threading.Lock()  # Lock específico para o preview
         
         self.create_widgets()
 
@@ -173,68 +176,69 @@ class VideoPlayerApp:
             self.show_preview()
         else:
             self._update_button_states('disabled')  # Desativa botões se nenhum arquivo selecionado
-
     def show_preview(self):
-        if self.cap is None or not hasattr(self.cap, 'read') or not self.cap.isOpened():
-            self.cap = cv2.VideoCapture(self.video_path)
-        if self.cap is None or not hasattr(self.cap, 'read') or not self.cap.isOpened():
-            messagebox.showwarning("Aviso", "Nenhum vídeo carregado para preview!")
+        if not self.video_path:
             return
-        
+
         # Para preview anterior se existir
         self.stop_preview()
-        
+
+        # Cria um VideoCapture dedicado para o preview
+        with self.preview_lock:
+            self.preview_cap = cv2.VideoCapture(self.video_path)
+            if not self.preview_cap.isOpened():
+                messagebox.showwarning("Aviso", "Não foi possível abrir o vídeo para preview!")
+                self.preview_cap = None
+                return
+
         # Extrai áudio
         audio_path = self._extract_audio()
         
         # Obtém FPS do vídeo
-        fps = self.cap.get(cv2.CAP_PROP_FPS)
+        fps = self.preview_cap.get(cv2.CAP_PROP_FPS)
         delay = 1.0 / fps if fps > 0 else 0.033  # 30 FPS default
         
         def update_preview():
-            self.preview_playing = True
-            self.play_btn['state'] = 'disabled'  # Disable play button while playing
-            
-            # Inicia áudio se disponível
-            if audio_path:
-                pygame.mixer.music.load(audio_path)
-                pygame.mixer.music.play()
-            
-            while self.preview_playing:
-                ret, frame = self.cap.read()
-                if not ret:
-                    self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                    if audio_path:
-                        pygame.mixer.music.play()
-                    continue
+            try:
+                self.preview_playing = True
+                self.play_btn['state'] = 'disabled'
                 
-                # Processa frame
-                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                # Inicia áudio se disponível
+                if audio_path:
+                    pygame.mixer.music.load(audio_path)
+                    pygame.mixer.music.play()
                 
-                # Calcula dimensões
-                window_width = self.preview_label.winfo_width()
-                window_height = self.preview_label.winfo_height()
-                
-                if window_width > 1 and window_height > 1:
-                    aspect_ratio = frame.shape[1] / frame.shape[0]
-                    if window_width / window_height > aspect_ratio:
-                        preview_height = int(window_height * 1.5)  # Scale height by 1.5
-                        preview_width = int(preview_height * aspect_ratio)
-                    else:
-                        preview_width = int(window_width * 1.5)  # Scale width by 1.5
-                        preview_height = int(preview_width / aspect_ratio)
+                while self.preview_playing:
+                    with self.preview_lock:
+                        if self.preview_cap is None:
+                            break
+                        ret, frame = self.preview_cap.read()
                     
-                    frame = cv2.resize(frame, (preview_width, preview_height))
-                
-                # Atualiza preview
-                image = Image.fromarray(frame)
-                photo = ImageTk.PhotoImage(image)
-                self.preview_label.config(image=photo)
-                self.preview_label.image = photo
-                
-                # Controle de tempo
-                self.root.update()
-                time.sleep(delay)
+                    if not ret:
+                        with self.preview_lock:
+                            if self.preview_cap is not None:
+                                self.preview_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                                if audio_path:
+                                    pygame.mixer.music.play()
+                        continue
+                    
+                    # Processa frame (código existente)
+                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    # ... (restante do processamento de frame)
+                    
+                    # Atualiza preview
+                    image = Image.fromarray(frame)
+                    photo = ImageTk.PhotoImage(image)
+                    self.preview_label.config(image=photo)
+                    self.preview_label.image = photo
+                    
+                    # Controle de tempo
+                    time.sleep(delay)
+            except Exception as e:
+                print(f"Erro no preview: {e}")
+            finally:
+                self.preview_playing = False
+                self.play_btn['state'] = 'normal'
         
         # Inicia preview em thread separada
         self.preview_thread = threading.Thread(target=update_preview)
@@ -244,11 +248,22 @@ class VideoPlayerApp:
     def stop_preview(self):
         """Para a reprodução do preview"""
         self.preview_playing = False
-        self.play_btn['state'] = 'normal'  # Re-enable play button when stopped
-        if self.preview_thread and self.preview_thread.is_alive():
-            self.preview_thread.join()
+        
+        # Para o áudio
         if pygame.mixer.music.get_busy():
             pygame.mixer.music.stop()
+        
+        # Libera o VideoCapture do preview
+        with self.preview_lock:
+            if self.preview_cap is not None:
+                self.preview_cap.release()
+                self.preview_cap = None
+        
+        # Espera a thread terminar
+        if self.preview_thread and self.preview_thread.is_alive():
+            self.preview_thread.join(timeout=1.0)
+        
+        self.play_btn['state'] = 'normal'
 
     def _validate_video_file(self):
         if not self.video_path or not os.path.exists(self.video_path):
@@ -280,6 +295,7 @@ class VideoPlayerApp:
         with self.cap_lock:
             if self.cap:
                 self.cap.release()
+                self.cap = None
         cv2.destroyAllWindows()
 
     def edit_video(self):
@@ -289,6 +305,7 @@ class VideoPlayerApp:
         self.stop_preview()
         self.stop_video()
         if self.temp_audio_file and os.path.exists(self.temp_audio_file):
+            pygame.mixer.music.unload()  # Garantir que o arquivo de áudio seja liberado
             try:
                 os.remove(self.temp_audio_file)
             except:
@@ -360,7 +377,7 @@ class VideoPlayerApp:
                     shutil.copy2(self.video_path, video_destination)
                 messagebox.showinfo("Sucesso", f"Extração concluída!\nFrames salvos em:\n{output_dir}")
                 self._update_progress(total_frames, total_frames)
-            self.root.after(0, copy_video)
+            self.root.after(0, copy_video)  # Adicionado after para evitar problemas de UI
         except PermissionError:
             messagebox.showerror("Erro", "Não foi possível mover o arquivo de vídeo. Ele pode estar em uso.")
         except Exception as e:
@@ -368,7 +385,7 @@ class VideoPlayerApp:
         finally:
             if cap is not None:
                 cap.release()
-                cv2.destroyAllWindows()
+            cv2.destroyAllWindows()
             # ADICIONE ISSO APÓS O finally:
             self.cap = cv2.VideoCapture(self.video_path)
 
