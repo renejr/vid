@@ -39,8 +39,8 @@ class VideoPlayerApp:
         self.cap_lock = threading.Lock()
         self.playing_lock = threading.Lock()
         self.progress_var = tk.DoubleVar()
-        
-        # Variáveis para controle de preview
+        # Add a new variable for video progress
+        self.video_progress_var = tk.DoubleVar()
         self.preview_playing = False
         self.preview_thread = None
         self.temp_audio_file = None
@@ -98,6 +98,9 @@ class VideoPlayerApp:
         # Preview label dentro do container
         self.preview_label = tk.Label(preview_container)
         self.preview_label.pack(expand=True, fill='both')
+        # Add the video progress bar below the preview label
+        self.video_progress_bar = ttk.Progressbar(preview_container, variable=self.video_progress_var, maximum=100, style="red.Horizontal.TProgressbar")
+        self.video_progress_bar.pack(fill='x', pady=(0, 2))
 
         # Frame inferior para controles de extração
         bottom_frame = tk.Frame(main_frame)
@@ -106,10 +109,8 @@ class VideoPlayerApp:
         # Frame para progresso
         self.progress_frame = tk.Frame(bottom_frame)
         self.progress_frame.pack(fill='x', pady=5)
-        
         self.progress_bar = ttk.Progressbar(self.progress_frame, variable=self.progress_var, maximum=100)
         self.progress_bar.pack(fill='x')
-        
         self.progress_label = tk.Label(self.progress_frame, text="")
         self.progress_label.pack()
 
@@ -426,7 +427,7 @@ class VideoPlayerApp:
                         concurrent.futures.wait(futures)
                     batch_frames.clear()
                 # Atualiza barra de progresso
-                self.root.after(0, lambda fc=frame_count, tf=total_frames: self._update_progress(fc, tf))
+                self._update_progress(frame_count, total_frames)
             if batch_frames:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
                     futures = [executor.submit(self.save_frame, frame, path) for frame, path in batch_frames]
@@ -458,11 +459,23 @@ class VideoPlayerApp:
             self.cap = cv2.VideoCapture(self.video_path)
 
     def _update_playback_progress(self, current_frame, total_frames):
-        """Update the progress bar and label with current playback position"""
+        """Update the video playback progress bar and label"""
+        if total_frames > 0:
+            progress = (current_frame / total_frames) * 100
+            self.video_progress_var.set(progress)
+        else:
+            self.video_progress_var.set(0)
+        self.root.update_idletasks()
+
+    def _update_progress(self, current_frame, total_frames):
+        """Update the extraction progress bar and label"""
         if total_frames > 0:
             progress = (current_frame / total_frames) * 100
             self.progress_var.set(progress)
-            self.progress_label.config(text=f"Frame: {current_frame}/{total_frames} ({progress:.1f}%)")
+            self.progress_label.config(text=f"Extraindo frames: {current_frame}/{total_frames}")
+        else:
+            self.progress_var.set(0)
+            self.progress_label.config(text="")
         self.root.update_idletasks()
 
 if __name__ == "__main__":
